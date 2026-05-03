@@ -1,14 +1,14 @@
-package com.example.musicplayer;
+package com.example.musicplayer.model;
 
 public class Track {
 
-    private int id;
+    private long id;
     private String title;
     private String artist;
     private String album;
     private String duration;
 
-    public Track(int id, String title, String artist, String album, String duration) {
+    public Track(long id, String title, String artist, String album, String duration) {
         this.id = id;
         this.title = title;
         this.artist = artist;
@@ -16,7 +16,7 @@ public class Track {
         this.duration = duration;
     }
 
-    public int getId() {
+    public long getId() {
         return id;
     }
 

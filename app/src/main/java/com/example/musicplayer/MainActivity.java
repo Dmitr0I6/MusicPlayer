@@ -7,10 +7,18 @@ import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.util.Log;
+
+import com.example.musicplayer.model.DeezerResponse;
+import com.example.musicplayer.model.DeezerTrack;
+import com.example.musicplayer.model.Track;
+import com.example.musicplayer.network.NetworkClient;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -18,9 +26,16 @@ import org.json.JSONObject;
 import java.io.InputStream;
 import java.util.ArrayList;
 
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Response;
+
 public class MainActivity extends Activity {
 
     private SessionManager sessionManager;
+
+    private EditText etSearch;
+    private ProgressBar progressLoading;
 
     private TextView tvTrackTitle;
     private TextView tvArtist;
@@ -50,15 +65,13 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
 
         initViews();
-        loadTracksFromJson();
-        showTracksList();
-
-        if (!tracks.isEmpty()) {
-            showTrack(0);
-        }
+        loadTracksFromApi("Imagine Dragons");
     }
 
     private void initViews() {
+        etSearch = findViewById(R.id.etSearch);
+        progressLoading = findViewById(R.id.progressLoading);
+
         tvTrackTitle = findViewById(R.id.tvTrackTitle);
         tvArtist = findViewById(R.id.tvArtist);
         tvAlbum = findViewById(R.id.tvAlbum);
@@ -66,11 +79,23 @@ public class MainActivity extends Activity {
         seekProgress = findViewById(R.id.seekProgress);
         btnPlay = findViewById(R.id.btnPlay);
 
+        Button btnSearch = findViewById(R.id.btnSearch);
         Button btnPrev = findViewById(R.id.btnPrev);
         Button btnNext = findViewById(R.id.btnNext);
         Button btnLogout = findViewById(R.id.btnLogout);
 
         tracksContainer = findViewById(R.id.tracksContainer);
+
+        btnSearch.setOnClickListener(v -> {
+            String query = etSearch.getText().toString().trim();
+
+            if (query.isEmpty()) {
+                Toast.makeText(this, "Введите название трека или исполнителя", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            loadTracksFromApi(query);
+        });
 
         btnPlay.setOnClickListener(v -> togglePlay());
         btnPrev.setOnClickListener(v -> previousTrack());
@@ -94,12 +119,12 @@ public class MainActivity extends Activity {
 
             @Override
             public void onStartTrackingTouch(SeekBar seekBar) {
-                // Метод вызывается при начале перемещения ползунка
+                // Начало перемещения ползунка
             }
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                // Метод вызывается после отпускания ползунка
+                // Конец перемещения ползунка
             }
         });
 
@@ -110,8 +135,66 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void loadTracksFromJson() {
+    private void loadTracksFromApi(String query) {
+        progressLoading.setVisibility(View.VISIBLE);
+
+        NetworkClient.getApi().searchTracks(query).enqueue(new Callback<DeezerResponse>() {
+            @Override
+            public void onResponse(Call<DeezerResponse> call, Response<DeezerResponse> response) {
+                progressLoading.setVisibility(View.GONE);
+
+                if (!response.isSuccessful() || response.body() == null || response.body().getData() == null) {
+                    Toast.makeText(MainActivity.this, "Ошибка ответа сервера", Toast.LENGTH_SHORT).show();
+                    loadTracksFromJsonFallback();
+                    return;
+                }
+
+                tracks.clear();
+
+                ArrayList<DeezerTrack> deezerTracks = response.body().getData();
+
+                for (DeezerTrack deezerTrack : deezerTracks) {
+                    Track track = new Track(
+                            deezerTrack.getId(),
+                            deezerTrack.getTitle(),
+                            deezerTrack.getArtistName(),
+                            deezerTrack.getAlbumTitle(),
+                            formatDuration(deezerTrack.getDuration())
+                    );
+
+                    tracks.add(track);
+                }
+
+                showTracksList();
+
+                if (!tracks.isEmpty()) {
+                    showTrack(0);
+                } else {
+                    Toast.makeText(MainActivity.this, "Треки не найдены", Toast.LENGTH_SHORT).show();
+                }
+            }
+
+            @Override
+            public void onFailure(Call<DeezerResponse> call, Throwable t) {
+                progressLoading.setVisibility(View.GONE);
+
+                Log.e("NETWORK_ERROR", "Ошибка сетевого запроса", t);
+
+                Toast.makeText(
+                        MainActivity.this,
+                        "Ошибка сети: " + t.getClass().getSimpleName(),
+                        Toast.LENGTH_LONG
+                ).show();
+
+                loadTracksFromJsonFallback();
+            }
+        });
+    }
+
+    private void loadTracksFromJsonFallback() {
         try {
+            tracks.clear();
+
             InputStream inputStream = getResources().openRawResource(R.raw.tracks);
             byte[] buffer = new byte[inputStream.available()];
             inputStream.read(buffer);
@@ -125,7 +208,7 @@ public class MainActivity extends Activity {
                 JSONObject item = jsonTracks.getJSONObject(i);
 
                 Track track = new Track(
-                        item.getInt("id"),
+                        item.getLong("id"),
                         item.getString("title"),
                         item.getString("artist"),
                         item.getString("album"),
@@ -135,8 +218,14 @@ public class MainActivity extends Activity {
                 tracks.add(track);
             }
 
+            showTracksList();
+
+            if (!tracks.isEmpty()) {
+                showTrack(0);
+            }
+
         } catch (Exception e) {
-            Toast.makeText(this, "Ошибка чтения JSON", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Ошибка чтения локального JSON", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -224,6 +313,17 @@ public class MainActivity extends Activity {
         }
 
         showTrack(newIndex);
+    }
+
+    private String formatDuration(int seconds) {
+        int minutes = seconds / 60;
+        int remainingSeconds = seconds % 60;
+
+        if (remainingSeconds < 10) {
+            return minutes + ":0" + remainingSeconds;
+        }
+
+        return minutes + ":" + remainingSeconds;
     }
 
     private void openLoginScreen() {
