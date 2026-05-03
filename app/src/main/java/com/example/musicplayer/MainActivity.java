@@ -1,6 +1,5 @@
 package com.example.musicplayer;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
@@ -13,26 +12,19 @@ import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.util.Log;
 
-import com.example.musicplayer.model.DeezerResponse;
-import com.example.musicplayer.model.DeezerTrack;
+import androidx.activity.ComponentActivity;
+import androidx.lifecycle.ViewModelProvider;
+
 import com.example.musicplayer.model.Track;
-import com.example.musicplayer.network.NetworkClient;
+import com.example.musicplayer.viewmodel.MusicViewModel;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import java.io.InputStream;
 import java.util.ArrayList;
 
-import retrofit2.Call;
-import retrofit2.Callback;
-import retrofit2.Response;
-
-public class MainActivity extends Activity {
+public class MainActivity extends ComponentActivity {
 
     private SessionManager sessionManager;
+    private MusicViewModel viewModel;
 
     private EditText etSearch;
     private ProgressBar progressLoading;
@@ -45,10 +37,6 @@ public class MainActivity extends Activity {
     private Button btnPlay;
 
     private LinearLayout tracksContainer;
-
-    private ArrayList<Track> tracks = new ArrayList<>();
-    private int currentTrackIndex = 0;
-    private boolean isPlaying = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,7 +53,9 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
 
         initViews();
-        loadTracksFromApi("Imagine Dragons");
+        initViewModel();
+
+        viewModel.loadTracks("Imagine Dragons");
     }
 
     private void initViews() {
@@ -94,12 +84,12 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            loadTracksFromApi(query);
+            viewModel.loadTracks(query);
         });
 
-        btnPlay.setOnClickListener(v -> togglePlay());
-        btnPrev.setOnClickListener(v -> previousTrack());
-        btnNext.setOnClickListener(v -> nextTrack());
+        btnPlay.setOnClickListener(v -> viewModel.togglePlay());
+        btnPrev.setOnClickListener(v -> viewModel.previousTrack());
+        btnNext.setOnClickListener(v -> viewModel.nextTrack());
 
         chbFavorite.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (isChecked) {
@@ -135,101 +125,43 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void loadTracksFromApi(String query) {
-        progressLoading.setVisibility(View.VISIBLE);
+    private void initViewModel() {
+        viewModel = new ViewModelProvider(this).get(MusicViewModel.class);
 
-        NetworkClient.getApi().searchTracks(query).enqueue(new Callback<DeezerResponse>() {
-            @Override
-            public void onResponse(Call<DeezerResponse> call, Response<DeezerResponse> response) {
+        viewModel.getLoadingLiveData().observe(this, isLoading -> {
+            if (isLoading != null && isLoading) {
+                progressLoading.setVisibility(View.VISIBLE);
+            } else {
                 progressLoading.setVisibility(View.GONE);
-
-                if (!response.isSuccessful() || response.body() == null || response.body().getData() == null) {
-                    Toast.makeText(MainActivity.this, "Ошибка ответа сервера", Toast.LENGTH_SHORT).show();
-                    loadTracksFromJsonFallback();
-                    return;
-                }
-
-                tracks.clear();
-
-                ArrayList<DeezerTrack> deezerTracks = response.body().getData();
-
-                for (DeezerTrack deezerTrack : deezerTracks) {
-                    Track track = new Track(
-                            deezerTrack.getId(),
-                            deezerTrack.getTitle(),
-                            deezerTrack.getArtistName(),
-                            deezerTrack.getAlbumTitle(),
-                            formatDuration(deezerTrack.getDuration())
-                    );
-
-                    tracks.add(track);
-                }
-
-                showTracksList();
-
-                if (!tracks.isEmpty()) {
-                    showTrack(0);
-                } else {
-                    Toast.makeText(MainActivity.this, "Треки не найдены", Toast.LENGTH_SHORT).show();
-                }
             }
+        });
 
-            @Override
-            public void onFailure(Call<DeezerResponse> call, Throwable t) {
-                progressLoading.setVisibility(View.GONE);
+        viewModel.getTracksLiveData().observe(this, tracks -> {
+            if (tracks != null) {
+                showTracksList(tracks);
+            }
+        });
 
-                Log.e("NETWORK_ERROR", "Ошибка сетевого запроса", t);
+        viewModel.getSelectedTrackLiveData().observe(this, track -> {
+            if (track != null) {
+                showTrack(track);
+            }
+        });
 
-                Toast.makeText(
-                        MainActivity.this,
-                        "Ошибка сети: " + t.getClass().getSimpleName(),
-                        Toast.LENGTH_LONG
-                ).show();
+        viewModel.getMessageLiveData().observe(this, message -> {
+            if (message != null && !message.isEmpty()) {
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+            }
+        });
 
-                loadTracksFromJsonFallback();
+        viewModel.getPlayButtonTextLiveData().observe(this, text -> {
+            if (text != null) {
+                btnPlay.setText(text);
             }
         });
     }
 
-    private void loadTracksFromJsonFallback() {
-        try {
-            tracks.clear();
-
-            InputStream inputStream = getResources().openRawResource(R.raw.tracks);
-            byte[] buffer = new byte[inputStream.available()];
-            inputStream.read(buffer);
-            inputStream.close();
-
-            String json = new String(buffer, "UTF-8");
-            JSONObject root = new JSONObject(json);
-            JSONArray jsonTracks = root.getJSONArray("tracks");
-
-            for (int i = 0; i < jsonTracks.length(); i++) {
-                JSONObject item = jsonTracks.getJSONObject(i);
-
-                Track track = new Track(
-                        item.getLong("id"),
-                        item.getString("title"),
-                        item.getString("artist"),
-                        item.getString("album"),
-                        item.getString("duration")
-                );
-
-                tracks.add(track);
-            }
-
-            showTracksList();
-
-            if (!tracks.isEmpty()) {
-                showTrack(0);
-            }
-
-        } catch (Exception e) {
-            Toast.makeText(this, "Ошибка чтения локального JSON", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void showTracksList() {
+    private void showTracksList(ArrayList<Track> tracks) {
         tracksContainer.removeAllViews();
 
         for (int i = 0; i < tracks.size(); i++) {
@@ -247,83 +179,23 @@ public class MainActivity extends Activity {
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
             );
+
             params.setMargins(0, 0, 0, 12);
             trackView.setLayoutParams(params);
 
-            trackView.setOnClickListener(v -> showTrack(index));
+            trackView.setOnClickListener(v -> viewModel.selectTrack(index));
 
             tracksContainer.addView(trackView);
         }
     }
 
-    private void showTrack(int index) {
-        if (index < 0 || index >= tracks.size()) {
-            return;
-        }
-
-        currentTrackIndex = index;
-        Track track = tracks.get(index);
-
+    private void showTrack(Track track) {
         tvTrackTitle.setText(track.getTitle());
         tvArtist.setText(track.getArtist());
         tvAlbum.setText("Альбом: " + track.getAlbum() + " • " + track.getDuration());
 
         chbFavorite.setChecked(false);
         seekProgress.setProgress(0);
-
-        Toast.makeText(this, "Выбран трек: " + track.getTitle(), Toast.LENGTH_SHORT).show();
-    }
-
-    private void togglePlay() {
-        isPlaying = !isPlaying;
-
-        if (isPlaying) {
-            btnPlay.setText("Pause");
-            seekProgress.setProgress(35);
-            Toast.makeText(this, "Воспроизведение", Toast.LENGTH_SHORT).show();
-        } else {
-            btnPlay.setText("Play");
-            Toast.makeText(this, "Пауза", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void previousTrack() {
-        if (tracks.isEmpty()) {
-            return;
-        }
-
-        int newIndex = currentTrackIndex - 1;
-
-        if (newIndex < 0) {
-            newIndex = tracks.size() - 1;
-        }
-
-        showTrack(newIndex);
-    }
-
-    private void nextTrack() {
-        if (tracks.isEmpty()) {
-            return;
-        }
-
-        int newIndex = currentTrackIndex + 1;
-
-        if (newIndex >= tracks.size()) {
-            newIndex = 0;
-        }
-
-        showTrack(newIndex);
-    }
-
-    private String formatDuration(int seconds) {
-        int minutes = seconds / 60;
-        int remainingSeconds = seconds % 60;
-
-        if (remainingSeconds < 10) {
-            return minutes + ":0" + remainingSeconds;
-        }
-
-        return minutes + ":" + remainingSeconds;
     }
 
     private void openLoginScreen() {
